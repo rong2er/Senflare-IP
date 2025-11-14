@@ -1,5 +1,5 @@
 # IP Test - Cloudflare优选IP采集器自动化工作流 v2.3.0
-# 每3小时自动执行一次，用于采集、检测和识别Cloudflare优选IP
+# 每小时的第25分钟执行一次，用于采集、检测和识别Cloudflare优选IP
 # 
 # 主要特性:
 # - 智能缓存系统，支持TTL机制
@@ -23,8 +23,8 @@ on:
   schedule:
     # 定时执行：每3小时执行一次（UTC时间）
     # cron格式：分 时 日 月 周
-    # cron: 40 * * * * 表示每小时的第40分钟执行一次
-    - cron: '40 * * * *'
+    # cron: 25 * * * * 表示每小时的第25分钟执行一次
+    - cron: '25 * * * *'
   workflow_dispatch: # 允许手动触发（在GitHub页面点击"Run workflow"按钮）
 
 # 工作流任务定义
