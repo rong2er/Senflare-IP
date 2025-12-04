@@ -1,6 +1,5 @@
 name: Filter Proxy List by Tag
 
-# 触发机制：每天 UTC 2:00 (北京时间 10:00) 自动运行，或者手动点击运行
 on:
   schedule:
     - cron: '0 2 * * *'
@@ -22,8 +21,13 @@ jobs:
       with:
         python-version: '3.x'
 
+    # 👇 必须要有这一步，否则就会报 "No module named requests"
+    - name: Install dependencies
+      run: pip install requests
+
     - name: Run Filter & Ping Script
       env:
+        # 这里填你的 TXT 下载地址
         SOURCE_URL: 'https://zip.cm.edu.kg/all.txt'
       run: |
         cat <<EOF > filter.py
@@ -41,23 +45,17 @@ jobs:
             "#SG",  # 新加坡
         ]
 
-        # 2. Ping 检测函数 (用于检测 IP 是否存活)
+        # 2. Ping 检测函数
         def check_alive(line):
             try:
-                # 从行中提取 IP，例如 "8.8.8.8:443#HK" -> "8.8.8.8"
-                # 简单的逻辑：取第一个冒号前面的部分
+                # 提取IP，去除端口和标签
                 ip = line.split(':')[0].strip()
-                
-                # 执行系统 Ping 命令 (Linux)
-                # -c 1: 只 Ping 1 次
-                # -W 2: 等待 2 秒超时 (GitHub网络好，2秒没回就是死了)
+                # Linux系统下 Ping 1次，超时2秒
                 cmd = ['ping', '-c', '1', '-W', '2', ip]
-                
-                # 如果返回码是 0，表示通了；否则报错
                 subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return line  # 活的，返回原行
+                return line
             except:
-                return None  # 死的，返回空
+                return None
 
         def main():
             url = os.environ.get('SOURCE_URL')
@@ -68,44 +66,37 @@ jobs:
                 resp.raise_for_status()
                 all_lines = resp.text.splitlines()
                 
-                # --- 第一步：按标签初筛 ---
+                # --- 标签筛选 ---
                 tag_filtered = []
                 for line in all_lines:
                     line = line.strip()
                     if not line: continue
-                    # 只要包含任意一个标签就保留
                     if any(tag in line.upper() for tag in TARGET_TAGS):
                         tag_filtered.append(line)
                 
                 # 去重
                 tag_filtered = sorted(list(set(tag_filtered)))
-                print(f"2. 标签筛选完成，剩余 {len(tag_filtered)} 个候选节点，准备进行 Ping 检测...")
-
-                if len(tag_filtered) == 0:
-                    print("警告：标签筛选结果为 0，跳过 Ping 检测。")
+                print(f"2. 标签筛选完成，剩余 {len(tag_filtered)} 个候选节点，开始 Ping 检测...")
+                
+                if not tag_filtered:
+                    print("警告：没有找到符合标签的节点。")
                     exit(0)
 
-                # --- 第二步：多线程并发 Ping (核心加速部分) ---
+                # --- 并发 Ping ---
                 alive_lines = []
-                # 开启 50 个线程同时 Ping，不用排队
                 with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                    # 提交所有任务
                     futures = [executor.submit(check_alive, line) for line in tag_filtered]
                     
-                    #以此获取结果
                     for future in concurrent.futures.as_completed(futures):
                         result = future.result()
                         if result:
                             alive_lines.append(result)
-                            # 每 10 个活 IP 打印一次进度，让你知道它在动
                             if len(alive_lines) % 10 == 0:
-                                print(f"  -> 已确认 {len(alive_lines)} 个有效存活 IP...")
+                                print(f"  -> 已确认 {len(alive_lines)} 个存活...")
 
-                print(f"3. Ping 检测完成！")
-                print(f"   原候选数: {len(tag_filtered)}")
-                print(f"   存活节点: {len(alive_lines)} (已剔除 {len(tag_filtered) - len(alive_lines)} 个死节点)")
+                print(f"3. 检测完成！存活: {len(alive_lines)} / 原有: {len(tag_filtered)}")
                 
-                # --- 第三步：保存结果 ---
+                # 保存结果
                 with open('asian_ip.txt', 'w', encoding='utf-8') as f:
                     f.write('\n'.join(alive_lines))
                     
@@ -118,3 +109,11 @@ jobs:
         EOF
         
         python filter.py
+
+    - name: Commit and Push results
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add asian_ip.txt
+        git commit -m "Auto update Asian IPs: $(date +'%Y-%m-%d')" || exit 0
+        git push
