@@ -22,66 +22,92 @@ jobs:
       with:
         python-version: '3.x'
 
-    - name: Install dependencies
-      run: pip install requests
-
-    - name: Run Filter Script
-      # 请在这里填入你的 TXT/订阅链接
+    - name: Run Filter & Ping Script
       env:
         SOURCE_URL: 'https://zip.cm.edu.kg/all.txt'
       run: |
         cat <<EOF > filter.py
         import requests
         import os
+        import subprocess
+        import concurrent.futures
 
-        # 定义我们要筛选的地区标签 (基于你提供的截图格式)
-        # 只要行内包含这些字符串的任意一个，就会被保留
+        # 1. 定义筛选地区
         TARGET_TAGS = [
             "#HK",  # 香港
             "#TW",  # 台湾
             "#JP",  # 日本
             "#KR",  # 韩国
-            
-            # 如果你的列表里有中文标签，也可以加在这里，例如：
-            # "#香港", "#日本"
+            "#SG",  # 新加坡
         ]
+
+        # 2. Ping 检测函数 (用于检测 IP 是否存活)
+        def check_alive(line):
+            try:
+                # 从行中提取 IP，例如 "8.8.8.8:443#HK" -> "8.8.8.8"
+                # 简单的逻辑：取第一个冒号前面的部分
+                ip = line.split(':')[0].strip()
+                
+                # 执行系统 Ping 命令 (Linux)
+                # -c 1: 只 Ping 1 次
+                # -W 2: 等待 2 秒超时 (GitHub网络好，2秒没回就是死了)
+                cmd = ['ping', '-c', '1', '-W', '2', ip]
+                
+                # 如果返回码是 0，表示通了；否则报错
+                subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return line  # 活的，返回原行
+            except:
+                return None  # 死的，返回空
 
         def main():
             url = os.environ.get('SOURCE_URL')
-            print(f"正在下载列表: {url}")
+            print(f"1. 正在下载列表: {url}")
             
             try:
-                # 下载内容
                 resp = requests.get(url, timeout=30)
                 resp.raise_for_status()
-                
-                # 按行分割
                 all_lines = resp.text.splitlines()
-                print(f"下载成功，原始行数: {len(all_lines)}")
                 
-                filtered_lines = []
-                
+                # --- 第一步：按标签初筛 ---
+                tag_filtered = []
                 for line in all_lines:
                     line = line.strip()
-                    if not line:
-                        continue
-                        
-                    # 核心筛选逻辑：检查行内是否包含目标标签
-                    # 使用 .upper() 确保 #hk 和 #HK 都能识别
+                    if not line: continue
+                    # 只要包含任意一个标签就保留
                     if any(tag in line.upper() for tag in TARGET_TAGS):
-                        filtered_lines.append(line)
+                        tag_filtered.append(line)
                 
-                # 去重（防止同一节点出现多次）
-                filtered_lines = sorted(list(set(filtered_lines)))
+                # 去重
+                tag_filtered = sorted(list(set(tag_filtered)))
+                print(f"2. 标签筛选完成，剩余 {len(tag_filtered)} 个候选节点，准备进行 Ping 检测...")
+
+                if len(tag_filtered) == 0:
+                    print("警告：标签筛选结果为 0，跳过 Ping 检测。")
+                    exit(0)
+
+                # --- 第二步：多线程并发 Ping (核心加速部分) ---
+                alive_lines = []
+                # 开启 50 个线程同时 Ping，不用排队
+                with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                    # 提交所有任务
+                    futures = [executor.submit(check_alive, line) for line in tag_filtered]
+                    
+                    #以此获取结果
+                    for future in concurrent.futures.as_completed(futures):
+                        result = future.result()
+                        if result:
+                            alive_lines.append(result)
+                            # 每 10 个活 IP 打印一次进度，让你知道它在动
+                            if len(alive_lines) % 10 == 0:
+                                print(f"  -> 已确认 {len(alive_lines)} 个有效存活 IP...")
+
+                print(f"3. Ping 检测完成！")
+                print(f"   原候选数: {len(tag_filtered)}")
+                print(f"   存活节点: {len(alive_lines)} (已剔除 {len(tag_filtered) - len(alive_lines)} 个死节点)")
                 
-                print(f"筛选完成，命中行数: {len(filtered_lines)}")
-                
-                if len(filtered_lines) == 0:
-                    print("警告：结果为 0。请检查 SOURCE_URL 是否正确，或者文件内的标签格式是否真的是 #HK")
-                
-                # 保存结果
-                with open('asian_ip.txt', 'w', encoding='utf-8') as f:1
-                    f.write('\n'.join(filtered_lines))
+                # --- 第三步：保存结果 ---
+                with open('asian_ip.txt', 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(alive_lines))
                     
             except Exception as e:
                 print(f"发生错误: {e}")
@@ -92,12 +118,3 @@ jobs:
         EOF
         
         python filter.py
-
-    - name: Commit and Push results
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        # 如果文件有变动才提交
-        git add asian_ip.txt
-        git commit -m "Auto update Proxy List: $(date +'%Y-%m-%d')" || exit 0
-        git push
