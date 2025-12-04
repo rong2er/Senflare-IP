@@ -1,0 +1,124 @@
+name: Filter Cloudflare Asian IPs
+
+# 触发机制：每天 UTC 2:00 (北京时间 10:00) 自动运行，或者手动点击运行
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+# 权限设置：允许脚本修改仓库内容（保存结果）
+permissions:
+  contents: write
+
+jobs:
+  filter-ips:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        pip install requests ipaddress
+
+    - name: Run Filter Script
+      # 在这里填入你找到的那个 TXT 网址
+      env:
+        SOURCE_URL: 'https://zip.cm.edu.kg/all.txt' # <--- 请替换成你找到的那个地址
+      run: |
+        cat <<EOF > filter.py
+        import requests
+        import ipaddress
+        import os
+
+        # 定义亚洲热门地区的 Cloudflare IP 段 (白名单)
+        # 这些段涵盖了 HK(香港), JP(日本), KR(韩国), SG(新加坡), TW(台湾) 的主要优化段
+        ASIAN_CIDRS = [
+            # --- 香港 HK ---
+            "103.21.244.0/22", "103.22.203.0/24", "172.69.160.0/20", 
+            "162.158.176.0/24", "141.101.64.0/18",
+            
+            # --- 日本 JP ---
+            "103.21.244.0/22", "103.22.201.0/24", "103.31.5.0/24",
+            "172.67.248.0/24", "162.158.119.0/24",
+            
+            # --- 新加坡 SG ---
+            "103.21.244.0/22", "103.22.200.0/22", "103.31.6.0/24",
+            "172.69.132.0/24", "141.101.90.0/24", "172.71.0.0/16",
+            
+            # --- 韩国 KR ---
+            "172.67.252.0/24", "162.158.18.0/24", "172.70.0.0/16",
+            
+            # --- 台湾 TW ---
+            "172.67.228.0/24", "108.162.249.0/24"
+        ]
+
+        # 预处理 CIDR 对象，加快匹配速度
+        cidr_networks = [ipaddress.ip_network(cidr, strict=False) for cidr in ASIAN_CIDRS]
+
+        def is_asian_ip(ip_str):
+            try:
+                # 清理 IP 字符串中的端口号或空格
+                ip_clean = ip_str.split(':')[0].strip()
+                if not ip_clean: return False
+                
+                ip_obj = ipaddress.ip_address(ip_clean)
+                
+                # 检查 IP 是否在白名单段内
+                for net in cidr_networks:
+                    if ip_obj in net:
+                        return True
+            except ValueError:
+                return False
+            return False
+
+        def main():
+            url = os.environ.get('SOURCE_URL')
+            print(f"正在下载 IP 列表: {url}")
+            
+            try:
+                resp = requests.get(url, timeout=10)
+                resp.raise_for_status()
+                all_ips = resp.text.splitlines()
+                
+                print(f"下载成功，原始 IP 数量: {len(all_ips)}")
+                
+                filtered_ips = []
+                for line in all_ips:
+                    # 有些列表可能是 CSV 格式，取第一列
+                    ip = line.replace(',', ' ').split()[0]
+                    if is_asian_ip(ip):
+                        filtered_ips.append(ip)
+                
+                # 去重
+                filtered_ips = sorted(list(set(filtered_ips)))
+                
+                print(f"筛选完成，命中亚洲 IP 数量: {len(filtered_ips)}")
+                
+                # 保存结果
+                with open('asian_ips.txt', 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(filtered_ips))
+                    
+            except Exception as e:
+                print(f"发生错误: {e}")
+                exit(1)
+
+        if __name__ == '__main__':
+            main()
+        EOF
+        
+        python filter.py
+
+    - name: Commit and Push results
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add asian_ips.txt
+        git commit -m "Auto update Asian IPs: $(date +'%Y-%m-%d')" || exit 0
+        git push
