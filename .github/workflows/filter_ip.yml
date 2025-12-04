@@ -99,6 +99,6 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         # 如果文件有变动才提交
-        git add asian_proxies.txt
+        git add asian_ip.txt
         git commit -m "Auto update Proxy List: $(date +'%Y-%m-%d')" || exit 0
         git push
