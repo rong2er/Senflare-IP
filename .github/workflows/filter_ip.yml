@@ -80,7 +80,7 @@ jobs:
                     print("警告：结果为 0。请检查 SOURCE_URL 是否正确，或者文件内的标签格式是否真的是 #HK")
                 
                 # 保存结果
-                with open('asian_proxies.txt', 'w', encoding='utf-8') as f:
+                with open('asian_ip.txt', 'w', encoding='utf-8') as f:1
                     f.write('\n'.join(filtered_lines))
                     
             except Exception as e:
