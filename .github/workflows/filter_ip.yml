@@ -21,38 +21,44 @@ jobs:
       with:
         python-version: '3.x'
 
-    # 👇 必须要有这一步，否则就会报 "No module named requests"
     - name: Install dependencies
       run: pip install requests
 
-    - name: Run Filter & Ping Script
+    - name: Run Filter & TCP-Check Script
       env:
-        # 这里填你的 TXT 下载地址
         SOURCE_URL: 'https://zip.cm.edu.kg/all.txt'
       run: |
         cat <<EOF > filter.py
         import requests
         import os
-        import subprocess
+        import socket
         import concurrent.futures
 
         # 1. 定义筛选地区
-        TARGET_TAGS = [
-            "#HK",  # 香港
-            "#TW",  # 台湾
-            "#JP",  # 日本
-            "#KR",  # 韩国
-            "#SG",  # 新加坡
-        ]
+        TARGET_TAGS = ["#HK", "#TW", "#JP", "#KR", "#SG"]
 
-        # 2. Ping 检测函数
-        def check_alive(line):
+        # 2. TCP 端口检测函数 (比 Ping 更准)
+        def check_port(line):
             try:
-                # 提取IP，去除端口和标签
-                ip = line.split(':')[0].strip()
-                # Linux系统下 Ping 1次，超时2秒
-                cmd = ['ping', '-c', '1', '-W', '2', ip]
-                subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # 预处理：分离标签，保留 "IP:端口"
+                # 例如 "8.8.8.8:443#HK" -> content="8.8.8.8:443"
+                content = line.split('#')[0].strip()
+                
+                # 分离 IP 和 端口
+                # 使用 rsplit 确保即使是 IPv6 也能正确切分最后一个冒号
+                if ':' not in content: return None
+                ip_str, port_str = content.rsplit(':', 1)
+                
+                # 去除 IPv6 可能带的方括号 []
+                ip = ip_str.replace('[', '').replace(']', '')
+                port = int(port_str)
+
+                # 建立 TCP 连接尝试
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(2) # 2秒超时，连不上就算死
+                    s.connect((ip, port))
+                
+                # 如果没报错，说明连通了，返回原行
                 return line
             except:
                 return None
@@ -76,23 +82,24 @@ jobs:
                 
                 # 去重
                 tag_filtered = sorted(list(set(tag_filtered)))
-                print(f"2. 标签筛选完成，剩余 {len(tag_filtered)} 个候选节点，开始 Ping 检测...")
+                print(f"2. 标签筛选完成，剩余 {len(tag_filtered)} 个候选节点，开始 TCP 端口检测...")
                 
                 if not tag_filtered:
                     print("警告：没有找到符合标签的节点。")
                     exit(0)
 
-                # --- 并发 Ping ---
+                # --- 并发 TCP 检测 ---
                 alive_lines = []
-                with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-                    futures = [executor.submit(check_alive, line) for line in tag_filtered]
+                # TCP 连接耗时较短，可以开更多线程 (100并发)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+                    futures = [executor.submit(check_port, line) for line in tag_filtered]
                     
                     for future in concurrent.futures.as_completed(futures):
                         result = future.result()
                         if result:
                             alive_lines.append(result)
                             if len(alive_lines) % 10 == 0:
-                                print(f"  -> 已确认 {len(alive_lines)} 个存活...")
+                                print(f"  -> 已确认 {len(alive_lines)} 个端口连通...")
 
                 print(f"3. 检测完成！存活: {len(alive_lines)} / 原有: {len(tag_filtered)}")
                 
