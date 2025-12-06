@@ -21,10 +21,9 @@ name: IP Test
 # 触发条件配置
 on:
   schedule:
-    # 定时执行：每3小时执行一次（UTC时间）
     # cron格式：分 时 日 月 周
-    # cron: 表示每天22点执行一次
-    - cron: '0 22 * * *'
+    # 表示每天北京时间23点55分执行一次
+    - cron: '55 15 * * *'
   workflow_dispatch: # 允许手动触发（在GitHub页面点击"Run workflow"按钮）
 
 # 工作流任务定义
